@@ -1,15 +1,19 @@
-"""Run an end-to-end demo of the Agentic Output Sanitizer."""
+"""Run an end-to-end demo of the Agentic Output Sanitizer without web deps."""
 from __future__ import annotations
 
-import asyncio
 import json
-import threading
-import time
+import sys
+from pathlib import Path
 
-import httpx
-import uvicorn
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from Code.app import app
+from Code.Agents.detector import EnsembleDetector
+from Code.Agents.mitigator import Mitigator
+from Code.Agents.policy_reasoner import PolicyReasoner
+from Code.Agents.speaker import LocalSpeaker
+from Code.Assets.Tools.audit_logger import AuditLogger
 
 
 DEMO_PROMPTS = [
@@ -19,29 +23,47 @@ DEMO_PROMPTS = [
 ]
 
 
-def _run_server() -> None:
-    config = uvicorn.Config(app, host="127.0.0.1", port=8000, log_level="warning")
-    server = uvicorn.Server(config)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(server.serve())
+def run_pipeline(prompt: str) -> dict[str, object]:
+    """Execute the sanitizer pipeline for a single prompt."""
+
+    generated = SPEAKER.generate(prompt)
+    text = generated.get("text", "")
+    logprobs = generated.get("logprobs") or generated.get("log_probs") or []
+
+    detection = DETECTOR.analyze(text, {"logprobs": logprobs})
+    decision = REASONER.decide(detection)
+    mitigation = MITIGATOR.apply(text, decision["action"], detection)
+
+    AUDIT_LOGGER.log_decision(
+        prompt=prompt,
+        raw_text=text,
+        action=decision["action"],
+        sanitized_text=mitigation["sanitized_text"],
+        detection_summary=detection,
+    )
+
+    return {
+        "prompt": prompt,
+        "raw_text": text,
+        "decision": decision,
+        "sanitized_text": mitigation["sanitized_text"],
+        "details": mitigation["details"],
+    }
 
 
 def main() -> None:
-    thread = threading.Thread(target=_run_server, daemon=True)
-    thread.start()
-    time.sleep(1)  # give the server a moment to start
+    for prompt in DEMO_PROMPTS:
+        result = run_pipeline(prompt)
+        print(f"Prompt: {prompt}")
+        print(json.dumps(result, indent=2))
+        print("-" * 60)
 
-    client = httpx.Client(base_url="http://127.0.0.1:8000")
-    try:
-        for prompt in DEMO_PROMPTS:
-            response = client.post("/generate", json={"prompt": prompt})
-            print(f"Prompt: {prompt}")
-            print(json.dumps(response.json(), indent=2))
-            print("-" * 60)
-    finally:
-        client.close()
-        time.sleep(0.5)
+
+SPEAKER = LocalSpeaker()
+DETECTOR = EnsembleDetector()
+REASONER = PolicyReasoner()
+MITIGATOR = Mitigator()
+AUDIT_LOGGER = AuditLogger()
 
 
 if __name__ == "__main__":
