@@ -1,0 +1,15 @@
+{
+  "weights": {
+    "exact": 0.6,
+    "pii": 0.3,
+    "exposure": 0.1
+  },
+  "thresholds": {
+    "escalate": 0.95,
+    "refuse": 0.85,
+    "redact": 0.6,
+    "paraphrase": 0.4,
+    "pass": 0.2
+  },
+  "default_action": "PASS"
+}
