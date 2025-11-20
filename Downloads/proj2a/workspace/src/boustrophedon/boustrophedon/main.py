@@ -43,7 +43,7 @@ class Controller:
         self.spiral_start_time = 0.0
         self.spiral_linear_vel = 0.1  # m/s
         self.spiral_angular_vel = 0.5  # rad/s
-        self.spiral_angular_increase = 0.05
+        self.spiral_linear_increase = 0.02  # m/s per second
         
         # Wall detection threshold
         self.wall_detect_threshold = 100.0
@@ -54,6 +54,11 @@ class Controller:
         self.kd = 0.005
         self.prev_error = 0.0
         self.wall_follow_speed = 0.15
+        self.speed_ramp_start_time = None
+        self.speed_ramp_rate = 0.02  # multiplier increase per second
+        self.max_speed_multiplier = 2.0
+        self.max_linear_speed = 0.35
+        self.max_angular_speed = 0.8
         
         # U-turn parameters
         self.uturn_stage = 0
@@ -78,9 +83,11 @@ class Controller:
             self.logger.info("Power button pressed - Starting spiral search")
             self.state = State.SPIRAL_SEARCH
             self.spiral_start_time = time.time()
+            self.speed_ramp_start_time = time.time()
         else:
             self.logger.info("Power button pressed - Resetting to initialized")
             self.state = State.INITIALIZED
+            self.speed_ramp_start_time = None
             self.stop_robot()
 
     def hazard_handler(self):
@@ -96,6 +103,13 @@ class Controller:
             # Store previous state
             if self.state != State.INITIALIZED:
                 self.prev_state = self.state
+
+            # Determine what type of collision we saw
+            if self.state == State.FOLLOW_WALL:
+                self.logger.info("Second wall hit - preparing for U-turn")
+                self.second_wall_detected = True
+            else:
+                self.second_wall_detected = False
 
     def pulse(self):
         # Update sensor readings
@@ -163,21 +177,14 @@ class Controller:
                 self.state = State.INITIALIZED
 
     def execute_spiral_search(self):
-        # Check if wall detected (right side)
-        if self.ir_readings[6] > self.wall_detect_threshold:
-            self.logger.info(f"Wall detected! IR: {self.ir_readings[6]}")
-            self.backing_up = True
-            self.backup_start_x = self.x
-            self.backup_start_y = self.y
-            self.prev_state = State.SPIRAL_SEARCH
-            return
-        
         # Continue spiral
         elapsed = time.time() - self.spiral_start_time
-        angular_vel = self.spiral_angular_vel - (self.spiral_angular_increase * elapsed)
-        
+        angular_vel = self.spiral_angular_vel 
+        linear_vel = self.spiral_linear_vel + (self.spiral_linear_increase * elapsed)
+        linear_vel = min(linear_vel, self.max_linear_speed)
+
         twist = Twist()
-        twist.linear.x = self.spiral_linear_vel
+        twist.linear.x = self.get_scaled_linear_speed(linear_vel)
         twist.angular.z = angular_vel
         self.cmd_vel_pub.publish(twist)
 
@@ -203,18 +210,6 @@ class Controller:
         self.cmd_vel_pub.publish(twist)
 
     def execute_wall_following(self):
-        # Check for second wall (front sensors)
-        front_ir = max(self.ir_readings[1:5])
-        
-        if front_ir > self.wall_detect_threshold and not self.second_wall_detected:
-            self.logger.info(f"Second wall detected! IR: {front_ir}")
-            self.second_wall_detected = True
-            self.backing_up = True
-            self.backup_start_x = self.x
-            self.backup_start_y = self.y
-            self.prev_state = State.FOLLOW_WALL
-            return
-        
         # PD controller
         right_ir = self.ir_readings[6]
         error = self.target_wall_distance - right_ir
@@ -223,7 +218,7 @@ class Controller:
         self.prev_error = error
         
         twist = Twist()
-        twist.linear.x = self.wall_follow_speed
+        twist.linear.x = self.get_scaled_linear_speed(self.wall_follow_speed)
         twist.angular.z = correction
         self.cmd_vel_pub.publish(twist)
 
@@ -233,7 +228,7 @@ class Controller:
             
             if angle_rotated < math.pi / 2:
                 twist = Twist()
-                twist.angular.z = 0.3
+                twist.angular.z = self.get_scaled_angular_speed(0.3)
                 self.cmd_vel_pub.publish(twist)
             else:
                 self.logger.info("First rotation complete")
@@ -249,7 +244,7 @@ class Controller:
             
             if distance < self.uturn_forward_distance:
                 twist = Twist()
-                twist.linear.x = 0.15
+                twist.linear.x = self.get_scaled_linear_speed(0.15)
                 self.cmd_vel_pub.publish(twist)
             else:
                 self.logger.info("Forward motion complete")
@@ -262,7 +257,7 @@ class Controller:
             
             if angle_rotated < math.pi / 2:
                 twist = Twist()
-                twist.angular.z = 0.3
+                twist.angular.z = self.get_scaled_angular_speed(0.3)
                 self.cmd_vel_pub.publish(twist)
             else:
                 self.logger.info("U-turn complete - Starting return")
@@ -271,12 +266,30 @@ class Controller:
 
     def execute_return(self):
         twist = Twist()
-        twist.linear.x = 0.15
+        twist.linear.x = self.get_scaled_linear_speed(0.15)
         self.cmd_vel_pub.publish(twist)
 
     def stop_robot(self):
         twist = Twist()
         self.cmd_vel_pub.publish(twist)
+
+    def get_speed_multiplier(self):
+        if self.speed_ramp_start_time is None:
+            return 1.0
+        elapsed = time.time() - self.speed_ramp_start_time
+        multiplier = 1.0 + elapsed * self.speed_ramp_rate
+        return min(multiplier, self.max_speed_multiplier)
+
+    def get_scaled_linear_speed(self, base_speed):
+        if base_speed <= 0:
+            return base_speed
+        scaled_speed = base_speed * self.get_speed_multiplier()
+        return min(scaled_speed, self.max_linear_speed)
+
+    def get_scaled_angular_speed(self, base_speed):
+        direction = 1 if base_speed >= 0 else -1
+        scaled_speed = abs(base_speed) * self.get_speed_multiplier()
+        return direction * min(scaled_speed, self.max_angular_speed)
 
     def normalize_angle(self, angle):
         while angle < 0:
