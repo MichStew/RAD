@@ -1,0 +1,46 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <world name="default">
+    <!-- global lights / ground -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- Walls: two static box walls simulating two walls of lab. -->
+    <!-- South wall -->
+    <model name="wall_south">
+      <static>true</static>
+      <!-- x y z roll pitch yaw -->
+      <pose>1 -2 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <!-- length depth height -->
+          <geometry><box><size>6 0.2 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6 0.2 2</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <!-- East wall -->
+    <model name="wall_east">
+      <static>true</static>
+      <!-- x y z roll pitch yaw -->
+      <pose>4 -0.5 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <!-- length depth height -->
+          <geometry><box><size>0.2 3 2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 3 2</size></box></geometry>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>
